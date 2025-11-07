@@ -1,0 +1,5 @@
+{
+  "name": "Copy of Caisse-Ahic",
+  "description": "A modern, responsive Point of Sale (POS) application for a bar, built with React and Tailwind CSS. It allows managing tables, orders, products, and includes an administration panel for sales reporting and product management.",
+  "requestFramePermissions": []
+}
