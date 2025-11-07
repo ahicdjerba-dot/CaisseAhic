@@ -30,15 +30,23 @@ interface ZReportData {
     creditTotal: number;
 }
 
-type AdminTab = 'products' | 'sales' | 'z-report' | 'settings';
+type AdminTab = 'products' | 'categories' | 'sales' | 'z-report' | 'settings';
 
 const AdminPanel: React.FC<AdminPanelProps> = ({ appData, setAppData, closePanel, currentPassword, onPasswordChange, onRecipientEmailChange }) => {
     const [activeTab, setActiveTab] = useState<AdminTab>('sales');
+    
+    // Product State
     const [isProductModalOpen, setProductModalOpen] = useState(false);
     const [editingProduct, setEditingProduct] = useState<Product | null>(null);
     const [productForm, setProductForm] = useState({ name: '', price: '', categoryId: '' });
     const [productToDelete, setProductToDelete] = useState<Product | null>(null);
     
+    // Category State
+    const [isCategoryModalOpen, setCategoryModalOpen] = useState(false);
+    const [editingCategory, setEditingCategory] = useState<Category | null>(null);
+    const [categoryForm, setCategoryForm] = useState({ name: '' });
+    const [categoryToDelete, setCategoryToDelete] = useState<Category | null>(null);
+
     const [salesDate, setSalesDate] = useState(new Date().toISOString().split('T')[0]);
     const [zReportMonth, setZReportMonth] = useState(new Date().toISOString().substring(0, 7));
 
@@ -165,6 +173,61 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ appData, setAppData, closePanel
         setProductToDelete(null);
     };
     
+    const openAddCategoryModal = () => {
+        setEditingCategory(null);
+        setCategoryForm({ name: '' });
+        setCategoryModalOpen(true);
+    };
+
+    const openEditCategoryModal = (category: Category) => {
+        setEditingCategory(category);
+        setCategoryForm({ name: category.name });
+        setCategoryModalOpen(true);
+    };
+
+    const handleSaveCategory = () => {
+        const { name } = categoryForm;
+        if (!name.trim()) {
+            alert("Veuillez entrer un nom de catégorie.");
+            return;
+        }
+
+        if (editingCategory) {
+            setAppData(prev => ({
+                ...prev,
+                categories: prev.categories.map(c => c.id === editingCategory.id ? { ...c, name: name.trim() } : c)
+            }));
+        } else {
+            const newCategory = {
+                id: Date.now(),
+                name: name.trim(),
+            };
+            setAppData(prev => ({
+                ...prev,
+                categories: [...prev.categories, newCategory]
+            }));
+        }
+        setCategoryModalOpen(false);
+    };
+
+    const requestDeleteCategory = (category: Category) => {
+        const isCategoryInUse = appData.products.some(p => p.categoryId === category.id);
+        if (isCategoryInUse) {
+            alert("Impossible de supprimer cette catégorie car elle est utilisée par un ou plusieurs produits. Veuillez d'abord changer la catégorie de ces produits.");
+            return;
+        }
+        setCategoryToDelete(category);
+    };
+
+    const handleConfirmDeleteCategory = () => {
+        if (!categoryToDelete) return;
+        setAppData(prev => ({
+            ...prev,
+            categories: prev.categories.filter(c => c.id !== categoryToDelete.id)
+        }));
+        setCategoryToDelete(null);
+    };
+
     const filteredSales = useMemo(() => {
         return appData.sales.filter(sale => sale.date.startsWith(salesDate) && sale.isFinal);
     }, [appData.sales, salesDate]);
@@ -719,6 +782,32 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ appData, setAppData, closePanel
         </div>
     );
     
+    const renderCategories = () => (
+        <div>
+            <div className="flex justify-between items-center mb-4">
+                <h3 className="text-xl font-semibold">Gestion des Catégories</h3>
+                <button onClick={openAddCategoryModal} className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600">Ajouter une catégorie</button>
+            </div>
+            <div className="bg-white rounded-lg shadow overflow-hidden">
+                <div className="grid grid-cols-2 font-bold p-3 bg-gray-50 border-b">
+                    <div>Nom</div>
+                    <div>Actions</div>
+                </div>
+                <div className="divide-y divide-gray-200 max-h-[60vh] overflow-y-auto">
+                {appData.categories.map(category => (
+                    <div key={category.id} className="grid grid-cols-2 p-3 items-center">
+                        <div>{category.name}</div>
+                        <div className="flex gap-2">
+                            <button onClick={() => openEditCategoryModal(category)} className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600">Modifier</button>
+                            <button onClick={() => requestDeleteCategory(category)} className="px-3 py-1 text-sm bg-red-500 text-white rounded hover:bg-red-600">Supprimer</button>
+                        </div>
+                    </div>
+                ))}
+                </div>
+            </div>
+        </div>
+    );
+
     const renderSales = () => {
         return (
              <div>
@@ -985,15 +1074,16 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ appData, setAppData, closePanel
                 <button onClick={closePanel} className="px-4 py-2 bg-slate-600 text-white rounded-md hover:bg-slate-700">Fermer</button>
             </div>
             <div className="flex gap-2 mb-6 border-b">
-                {(['sales', 'products', 'z-report', 'settings'] as AdminTab[]).map(tab => (
+                {(['sales', 'products', 'categories', 'z-report', 'settings'] as AdminTab[]).map(tab => (
                     <button key={tab} onClick={() => setActiveTab(tab)} className={`px-4 py-2 rounded-t-md font-semibold capitalize ${activeTab === tab ? 'bg-white border border-b-0' : 'bg-gray-200'}`}>
-                        {tab === 'products' ? 'Articles' : tab === 'sales' ? 'Ventes' : tab === 'z-report' ? 'Rapport Z' : 'Paramètres'}
+                        {tab === 'products' ? 'Articles' : tab === 'categories' ? 'Catégories' : tab === 'sales' ? 'Ventes' : tab === 'z-report' ? 'Rapport Z' : 'Paramètres'}
                     </button>
                 ))}
             </div>
             
             <div className="admin-content">
                 {activeTab === 'products' && renderProducts()}
+                {activeTab === 'categories' && renderCategories()}
                 {activeTab === 'sales' && renderSales()}
                 {activeTab === 'z-report' && renderZReport()}
                 {activeTab === 'settings' && renderSettings()}
@@ -1035,6 +1125,40 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ appData, setAppData, closePanel
                         Annuler
                     </button>
                     <button onClick={handleConfirmDelete} className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700">
+                        Confirmer
+                    </button>
+                </div>
+            </Modal>
+            
+            <Modal title={editingCategory ? "Modifier la catégorie" : "Ajouter une catégorie"} isOpen={isCategoryModalOpen} onClose={() => setCategoryModalOpen(false)}>
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-sm font-medium">Nom</label>
+                        <input 
+                            type="text" 
+                            name="name" 
+                            value={categoryForm.name} 
+                            onChange={(e) => setCategoryForm({ name: e.target.value })} 
+                            className="w-full px-3 py-2 border rounded-md" 
+                            autoFocus
+                        />
+                    </div>
+                </div>
+                <div className="mt-6 flex justify-end gap-3">
+                    <button onClick={() => setCategoryModalOpen(false)} className="px-4 py-2 bg-gray-200 rounded-md hover:bg-gray-300">Annuler</button>
+                    <button onClick={handleSaveCategory} className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Sauvegarder</button>
+                </div>
+            </Modal>
+
+            <Modal title="Confirmer la suppression" isOpen={!!categoryToDelete} onClose={() => setCategoryToDelete(null)}>
+                <p className="text-gray-700">
+                    Êtes-vous sûr de vouloir supprimer la catégorie <strong>{categoryToDelete?.name}</strong> ? Cette action est irréversible.
+                </p>
+                <div className="mt-6 flex justify-end gap-3">
+                    <button onClick={() => setCategoryToDelete(null)} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-md hover:bg-gray-300">
+                        Annuler
+                    </button>
+                    <button onClick={handleConfirmDeleteCategory} className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700">
                         Confirmer
                     </button>
                 </div>
