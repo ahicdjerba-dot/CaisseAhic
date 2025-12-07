@@ -1,8 +1,34 @@
+
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { AppData, Table, Category, Product, OrderItem, Sale, Room } from './types';
-import AdminPanel from './components/AdminPanel';
+import { AppData, Table, Category, Product, OrderItem, Sale, Room, Printer } from './types';
+import { AdminPanel } from './components/AdminPanel';
 import Modal from './components/Modal';
 import * as db from './db';
+
+// Mock definition for Capacitor globally to avoid build errors in web preview
+declare global {
+    interface Window {
+        Capacitor?: {
+            isNativePlatform: () => boolean;
+            Plugins?: {
+                ThermalPrinter?: any;
+            };
+        };
+        // Plugin interface mock
+        ThermalPrinter?: {
+            printFormattedText: (options: {
+                type: 'bluetooth' | 'tcp';
+                id: string; // MAC address or IP:Port
+                text: string;
+            }) => Promise<void>;
+            printBitmap: (options: {
+                type: 'bluetooth' | 'tcp';
+                id: string;
+                base64: string;
+            }) => Promise<void>;
+        };
+    }
+}
 
 const INITIAL_DATA: AppData = {
     rooms: [
@@ -43,6 +69,11 @@ const INITIAL_DATA: AppData = {
     closingReports: [],
     backgroundImage: null,
     recipientEmail: 'ahic.djerba@gmail.com',
+    printers: [],
+    defaultPrinterId: null,
+    servers: [{ id: 1, name: 'Anis', password: '1234' }],
+    saleSequence: 1,
+    establishmentName: '',
 };
 
 const App: React.FC = () => {
@@ -54,44 +85,90 @@ const App: React.FC = () => {
     const [isPayModalOpen, setPayModalOpen] = useState(false);
     const [paymentDiscount, setPaymentDiscount] = useState(0);
 
-    // State for password protection
-    const [isPasswordModalOpen, setPasswordModalOpen] = useState(false);
-    const [passwordInput, setPasswordInput] = useState('');
-    const [passwordError, setPasswordError] = useState('');
     const [adminPassword, setAdminPassword] = useState('12345');
+    const SUPER_ADMIN_PASSWORD = '170681';
+
+    // State for login
+    const [currentUser, setCurrentUser] = useState<{ type: 'admin' | 'server' | 'super-admin'; name: string } | null>(null);
+    const [loginPassword, setLoginPassword] = useState('');
+    const [loginError, setLoginError] = useState('');
+
+    // State for quantity change password lock
+    const [isQuantityLockModalOpen, setQuantityLockModalOpen] = useState(false);
+    const [itemToUpdate, setItemToUpdate] = useState<{ itemId: number; change: 1 | -1 } | null>(null);
+    const [quantityAdminPassword, setQuantityAdminPassword] = useState('');
+    const [quantityAdminError, setQuantityAdminError] = useState('');
+
+    // State for Quick Bluetooth Add
+    const [isBluetoothModalOpen, setBluetoothModalOpen] = useState(false);
+    const [bluetoothSearchMessage, setBluetoothSearchMessage] = useState('');
+    const [bluetoothPrinterName, setBluetoothPrinterName] = useState('');
+
+    // State for Quick IP Add
+    const [isIpModalOpen, setIpModalOpen] = useState(false);
+    const [ipPrinterName, setIpPrinterName] = useState('');
+    const [ipAddress, setIpAddress] = useState('');
+    const [ipPort, setIpPort] = useState('9100');
+
 
     useEffect(() => {
         const loadData = async () => {
             try {
-                // Load main data from localStorage
-                const savedJSON = localStorage.getItem('barPOSData');
+                // Load main data from localStorage safely
+                let savedJSON = null;
+                try {
+                    savedJSON = localStorage.getItem('barPOSData');
+                } catch (e) {
+                    console.warn("L'accès au LocalStorage est bloqué. Utilisation des données par défaut.");
+                }
+                
                 let loadedData = savedJSON ? JSON.parse(savedJSON) : INITIAL_DATA;
                 
                 loadedData.backgroundImage = null;
 
                 // Load background image, password, and email from IndexedDB
-                const backgroundImage = await db.get<string>('backgroundImage');
-                const savedPassword = await db.get<string>('adminPassword');
-                const recipientEmail = await db.get<string>('recipientEmail');
-                
-                if (backgroundImage) {
-                    loadedData.backgroundImage = backgroundImage;
-                }
-                if (savedPassword) {
-                    setAdminPassword(savedPassword);
-                }
-                if (recipientEmail) {
-                    loadedData.recipientEmail = recipientEmail;
+                // If IndexedDB fails, it will catch and just use defaults
+                try {
+                    const backgroundImage = await db.get<string>('backgroundImage');
+                    const savedPassword = await db.get<string>('adminPassword');
+                    const recipientEmail = await db.get<string>('recipientEmail');
+                    
+                    if (backgroundImage) {
+                        loadedData.backgroundImage = backgroundImage;
+                    }
+                    if (savedPassword) {
+                        setAdminPassword(savedPassword);
+                    }
+                    if (recipientEmail) {
+                        loadedData.recipientEmail = recipientEmail;
+                    }
+                } catch (dbError) {
+                    console.warn("Impossible de charger les données IndexedDB (peut-être bloqué par le navigateur).", dbError);
                 }
 
                 if (!loadedData.closingReports) {
                     loadedData.closingReports = [];
                 }
+                if (!loadedData.printers) {
+                    loadedData.printers = [];
+                }
+                if (loadedData.defaultPrinterId === undefined) {
+                    loadedData.defaultPrinterId = null;
+                }
+                 if (!loadedData.servers) {
+                    loadedData.servers = [];
+                }
+                if (loadedData.saleSequence === undefined) {
+                    loadedData.saleSequence = 1;
+                }
+                if (loadedData.establishmentName === undefined) {
+                    loadedData.establishmentName = '';
+                }
                 
                 setAppData(loadedData);
 
             } catch (error) {
-                console.error("Failed to load data", error);
+                console.error("Erreur critique lors du chargement des données. Retour aux données initiales.", error);
                 setAppData(INITIAL_DATA); 
             }
         };
@@ -106,15 +183,25 @@ const App: React.FC = () => {
         const saveData = async () => {
             try {
                 const { backgroundImage, recipientEmail, ...dataToSave } = appData;
-                localStorage.setItem('barPOSData', JSON.stringify(dataToSave));
                 
-                if (backgroundImage) {
-                    await db.set('backgroundImage', backgroundImage);
-                } else {
-                    await db.del('backgroundImage');
+                try {
+                    localStorage.setItem('barPOSData', JSON.stringify(dataToSave));
+                } catch (e) {
+                    // Silently fail or log warning if storage is full/blocked
+                    console.warn("Impossible de sauvegarder dans localStorage.");
                 }
-                if (recipientEmail) {
-                    await db.set('recipientEmail', recipientEmail);
+                
+                try {
+                    if (backgroundImage) {
+                        await db.set('backgroundImage', backgroundImage);
+                    } else {
+                        await db.del('backgroundImage');
+                    }
+                    if (recipientEmail) {
+                        await db.set('recipientEmail', recipientEmail);
+                    }
+                } catch (dbError) {
+                     console.warn("Impossible de sauvegarder dans IndexedDB.");
                 }
 
             } catch (error) {
@@ -130,14 +217,12 @@ const App: React.FC = () => {
     const dailyTotal = useMemo(() => {
         const today = new Date().toISOString().split('T')[0];
         return appData.sales
-            .filter(sale => sale.isFinal && sale.date.startsWith(today))
+            .filter(sale => sale.isFinal && sale.date.startsWith(today) && sale.status !== 'voided')
             .reduce((sum, sale) => sum + sale.total, 0);
     }, [appData.sales]);
 
 
     const handleCloseApp = () => {
-        // NOTE: window.close() may not work in all browsers/contexts,
-        // but it's the standard way to request closing the current window.
         if (window.confirm("Êtes-vous sûr de vouloir fermer l'application ?")) {
             window.close();
         }
@@ -168,27 +253,56 @@ const App: React.FC = () => {
             return { ...prevData, tables: newTables };
         });
     };
-
-    const updateOrderItemQuantity = (itemId: number, change: 1 | -1) => {
-        if (!currentTable) return;
+    
+    const _performQuantityUpdate = (itemId: number, change: 1 | -1) => {
+        if (!currentTableId) return;
 
         setAppData(prevData => {
             const newTables = prevData.tables.map(table => {
                 if (table.id === currentTableId) {
-                    let newOrder = table.order.map(item =>
-                        item.id === itemId ? { ...item, quantity: item.quantity + change } : item
-                    ).filter(item => item.quantity > 0);
-                    
-                    const newStatus = newOrder.length > 0 ? 'occupied' : 'free';
+                    const newOrder = table.order
+                        .map(item =>
+                            item.id === itemId ? { ...item, quantity: item.quantity + change } : item
+                        )
+                        .filter(item => item.quantity > 0);
+
+                    // FIX: Explicitly type `newStatus` to prevent it from being widened to `string`.
+                    const newStatus: 'free' | 'occupied' = newOrder.length > 0 ? 'occupied' : 'free';
                     const ticketPrinted = newOrder.length > 0 ? table.ticketPrinted : false;
-                    return { ...table, order: newOrder, status: newStatus as 'free' | 'occupied', ticketPrinted };
+                    return { ...table, order: newOrder, status: newStatus, ticketPrinted };
                 }
                 return table;
             });
             return { ...prevData, tables: newTables };
         });
     };
+
+    const updateOrderItemQuantity = (itemId: number, change: 1 | -1) => {
+        if (!currentTable) return;
+        
+        if (currentTable.ticketPrinted && change === -1) {
+            setItemToUpdate({ itemId, change });
+            setQuantityAdminPassword('');
+            setQuantityAdminError('');
+            setQuantityLockModalOpen(true);
+        } else {
+            _performQuantityUpdate(itemId, change);
+        }
+    };
     
+     const handleConfirmQuantityUpdate = () => {
+        if (!itemToUpdate) return;
+
+        if (quantityAdminPassword !== adminPassword && quantityAdminPassword !== SUPER_ADMIN_PASSWORD) {
+            setQuantityAdminError('Mot de passe incorrect.');
+            return;
+        }
+
+        _performQuantityUpdate(itemToUpdate.itemId, itemToUpdate.change);
+        setQuantityLockModalOpen(false);
+        setItemToUpdate(null);
+    };
+
     const recordSale = useCallback((options: { 
         isFinal: boolean; 
         paymentMethod?: 'cash' | 'card' | 'credit';
@@ -205,8 +319,11 @@ const App: React.FC = () => {
         const subtotal = currentTable.order.reduce((sum, item) => sum + (item.price * item.quantity), 0);
         const total = subtotal * (1 - options.discountPercentage / 100);
 
+        const currentSequence = appData.saleSequence;
+
         const sale: Sale = {
             id: Date.now(),
+            dailySequence: currentSequence,
             tableId: currentTable.id,
             tableName: currentTable.name,
             roomName: room.name,
@@ -217,17 +334,27 @@ const App: React.FC = () => {
             date: new Date().toISOString(),
             isFinal: options.isFinal,
             paymentMethod: options.paymentMethod,
+            status: 'active',
+            serverName: currentUser?.name || 'Inconnu',
         };
         
-        setAppData(prev => ({...prev, sales: [...prev.sales, sale]}));
+        setAppData(prev => ({
+            ...prev, 
+            sales: [...prev.sales, sale],
+            saleSequence: prev.saleSequence + 1
+        }));
         return sale;
 
-    }, [currentTable, appData.rooms]);
+    }, [currentTable, appData.rooms, appData.saleSequence, currentUser]);
 
-    const generateTicketHTML = (sale: Sale, isReceipt: boolean, paymentMethod?: 'cash' | 'card' | 'credit') => {
+    // --- PRINTING LOGIC ---
+
+    // 1. HTML Generator for Browser/Iframe printing
+    const generateTicketHTML = (sale: Sale, isReceipt: boolean, establishmentName: string, paymentMethod?: 'cash' | 'card' | 'credit') => {
         const title = isReceipt ? 'Reçu' : 'Ticket';
         const subtotal = sale.subtotal;
         const total = sale.total;
+        const establishmentHeader = establishmentName ? `<h1>${establishmentName}</h1>` : '<h1>Bienvenu</h1>';
         
         let methodText = '';
         if (paymentMethod === 'cash') {
@@ -241,10 +368,19 @@ const App: React.FC = () => {
         return `
             <html>
                 <head>
-                    <title>${title} N° ${sale.id}</title>
+                    <title>${title} N° ${String(sale.dailySequence).padStart(4, '0')}</title>
                     <style>
-                        @page { size: 80mm auto; margin: 0; }
-                        body { font-family: 'Courier New', Courier, monospace; font-size: 10pt; width: 80mm; padding: 3mm; box-sizing: border-box; color: #000; }
+                        @page { margin: 0; }
+                        body { 
+                            font-family: 'Courier New', Courier, monospace; 
+                            font-size: 10pt; 
+                            width: 100%; 
+                            max-width: 80mm; 
+                            margin: 0 auto; 
+                            padding: 3mm; 
+                            box-sizing: border-box; 
+                            color: #000; 
+                        }
                         .header, .footer { text-align: center; }
                         .header h1 { margin: 0; font-size: 14pt; }
                         .header p { margin: 2px 0; font-size: 9pt; }
@@ -262,8 +398,9 @@ const App: React.FC = () => {
                 </head>
                 <body>
                     <div class="header">
-                        <h1>Bienvenu</h1>
-                        <p>${title} N° ${String(sale.id).slice(-6)}</p>
+                        ${establishmentHeader}
+                        <p>${title} N° ${String(sale.dailySequence).padStart(4, '0')}</p>
+                        <p>Serveur: ${sale.serverName || 'Staff'}</p>
                         <p>Salle: ${sale.roomName}</p>
                         <p>Table: ${sale.tableName}</p>
                         <p>Date: ${new Date(sale.date).toLocaleString('fr-FR')}</p>
@@ -302,348 +439,782 @@ const App: React.FC = () => {
                     ` : ''}
                     <div class="footer">
                        <p>Merci de votre visite !</p>
+                       <br/><br/><br/><br/>
                     </div>
                 </body>
             </html>
         `;
     };
     
-    const printHTML = (htmlContent: string) => {
-        const printWindow = window.open('', '_blank', 'width=302'); // 80mm ~ 302px
-        if (printWindow) {
-            printWindow.document.write(htmlContent);
-            printWindow.document.close();
-            printWindow.focus();
-            printWindow.print();
-            printWindow.close();
+    // Generator for Preparation Ticket (Bon de Commande) - HTML
+    const generatePreparationHTML = (sale: Sale, itemsOverride?: OrderItem[], printerName?: string) => {
+        const itemsToPrint = itemsOverride || sale.items;
+        return `
+            <html>
+                <head>
+                    <title>PREPARATION</title>
+                    <style>
+                        @page { margin: 0; }
+                        body { 
+                            font-family: 'Courier New', Courier, monospace; 
+                            font-size: 12pt; 
+                            width: 100%; 
+                            max-width: 80mm; 
+                            margin: 0 auto; 
+                            padding: 3mm; 
+                            box-sizing: border-box; 
+                            color: #000; 
+                        }
+                        .header { text-align: center; margin-bottom: 10px; }
+                        .header h1 { margin: 0; font-size: 16pt; font-weight: bold; border-bottom: 2px solid black; display: inline-block; padding-bottom: 2px;}
+                        .meta { font-size: 12pt; margin-top: 5px; font-weight: bold; }
+                        .printer-name { font-size: 14pt; margin-top: 5px; font-weight: bold; text-decoration: underline; }
+                        .items-table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+                        .items-table th, .items-table td { padding: 5px 0; font-size: 12pt; text-align: left; }
+                        .items-table .item-qty { text-align: right; font-weight: bold; font-size: 16pt; }
+                        .items-table .item-name { padding-left: 10px; font-weight: bold; font-size: 14pt; }
+                    </style>
+                </head>
+                <body>
+                    <div class="header">
+                        <h1>PREPARATION</h1>
+                        ${printerName ? `<div class="printer-name">${printerName}</div>` : ''}
+                        <div class="meta">${sale.tableName}</div>
+                        <div class="meta">Serveur: ${sale.serverName || 'Staff'}</div>
+                        <div class="meta">${new Date(sale.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
+                    </div>
+                    <table class="items-table">
+                         <tbody>
+                            ${itemsToPrint.map(item => `
+                                <tr>
+                                    <td class="item-qty">${item.quantity} x</td>
+                                    <td class="item-name">${item.name}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                    <br/><br/><br/><br/>
+                </body>
+            </html>
+        `;
+    };
+
+    // 2. Text Generator for Native Thermal Printer (Bluetooth/TCP)
+    const generateThermalPrinterText = (sale: Sale, type: 'ticket' | 'preparation', itemsOverride?: OrderItem[], printerName?: string, paymentMethod?: string) => {
+        let text = '';
+        
+        if (type === 'ticket') {
+            const estName = appData.establishmentName || 'Bienvenu';
+            text += `[C]<b><font size='big'>${estName}</font></b>\n`;
+            text += `[C]Ticket N ${String(sale.dailySequence).padStart(4, '0')}\n`;
+            text += `[L]Serveur: ${sale.serverName || 'Staff'}\n`;
+            text += `[L]Salle: ${sale.roomName}\n`;
+            text += `[L]Table: ${sale.tableName}\n`;
+            text += `[L]Date: ${new Date(sale.date).toLocaleString('fr-FR')}\n`;
+            text += `[C]--------------------------------\n`;
+            text += `[L]Article             Qt     Total\n`;
+            text += `[C]--------------------------------\n`;
+            
+            sale.items.forEach(item => {
+                const total = (item.price * item.quantity).toFixed(2);
+                let name = item.name;
+                if (name.length > 18) name = name.substring(0, 18);
+                const space1 = ' '.repeat(20 - name.length);
+                const qtyStr = String(item.quantity);
+                const space2 = ' '.repeat(4 - qtyStr.length);
+                
+                text += `[L]${name}${space1}${qtyStr}${space2}${total}\n`;
+            });
+            
+            text += `[C]--------------------------------\n`;
+             if (sale.discountPercentage > 0) {
+                 text += `[R]SOUS-TOTAL: ${sale.subtotal.toFixed(2)} TND\n`;
+                 text += `[R]REMISE: -${(sale.subtotal - sale.total).toFixed(2)} TND\n`;
+            }
+            text += `[R]<b><font size='big'>TOTAL: ${sale.total.toFixed(2)} TND</font></b>\n`;
+            if (paymentMethod) {
+                let method = paymentMethod === 'cash' ? 'Especes' : paymentMethod === 'card' ? 'Carte' : 'Credit';
+                text += `[R]Paye par: ${method}\n`;
+            }
+            text += `[C]\n[C]Merci de votre visite !\n`;
+            // Add 4 lines feed and Partial Cut command (ESC/POS GS V 1)
+            text += `[L]\n[L]\n[L]\n[L]\n`;
+            text += `\x1dV\x01`;
+
+        } else if (type === 'preparation') {
+            const itemsToPrint = itemsOverride || sale.items;
+            text += `[C]<b><font size='big'>PREPARATION</font></b>\n`;
+            if (printerName) text += `[C]<b><u>${printerName}</u></b>\n`;
+            text += `[C]<b><font size='big'>${sale.tableName}</font></b>\n`;
+            text += `[L]Serveur: ${sale.serverName || 'Staff'}\n`;
+            text += `[C]${new Date(sale.date).toLocaleTimeString()}\n`;
+            text += `[C]--------------------------------\n`;
+            
+            itemsToPrint.forEach(item => {
+                 text += `[L]<b><font size='big'>${item.quantity} x  ${item.name}</font></b>\n`;
+            });
+            // Add 4 lines feed and Partial Cut command (ESC/POS GS V 1)
+            text += `[L]\n[L]\n[L]\n[L]\n`;
+            text += `\x1dV\x01`;
+        }
+        
+        return text;
+    };
+
+    const handlePrintSale = async (
+        sale: Sale, 
+        type: 'ticket' | 'preparation', 
+        targetPrinter?: Printer, 
+        itemsOverride?: OrderItem[],
+        paymentMethod?: 'cash' | 'card' | 'credit'
+    ) => {
+        // Déterminer l'imprimante à utiliser
+        let printer = targetPrinter;
+        
+        // Si aucune imprimante cible spécifique n'est passée, chercher celle par défaut
+        if (!printer && appData.defaultPrinterId) {
+            printer = appData.printers.find(p => p.id === appData.defaultPrinterId);
+        }
+
+        // --- MODE ANDROID / CAPACITOR (Native) ---
+        if (window.Capacitor?.isNativePlatform()) {
+             // 1. Essayer le plugin ThermalPrinter (Bluetooth/TCP Raw)
+             const ThermalPrinter = window.ThermalPrinter || window.Capacitor.Plugins?.ThermalPrinter;
+
+             if (ThermalPrinter && printer && (printer.type === 'bluetooth' || printer.type === 'network')) {
+                 const formattedText = generateThermalPrinterText(sale, type, itemsOverride, printer.name, paymentMethod);
+                 const address = printer.address + (printer.type === 'network' && printer.port ? `:${printer.port}` : '');
+                 
+                 try {
+                     await ThermalPrinter.printFormattedText({
+                         type: printer.type === 'network' ? 'tcp' : 'bluetooth',
+                         id: address,
+                         text: formattedText
+                     });
+                     return; // Succès natif, on s'arrête là
+                 } catch (err) {
+                     console.error("Erreur impression native:", err);
+                     // Fallback silencieux vers la méthode web si échec
+                 }
+             }
+        }
+
+        // --- MODE WEB / FALLBACK (Iframe/Browser) ---
+        // Si on est ici, soit ce n'est pas Android, soit l'impression native a échoué, soit c'est une imprimante système/USB
+        let htmlContent = '';
+        if (type === 'preparation') {
+            htmlContent = generatePreparationHTML(sale, itemsOverride, printer ? printer.name : undefined);
         } else {
-            alert("La fenêtre d'impression a été bloquée. Veuillez autoriser les pop-ups pour ce site.");
+            htmlContent = generateTicketHTML(sale, true, appData.establishmentName, paymentMethod);
+        }
+        
+        // Android WebView Interface (si implémentée par le développeur Android)
+        if (typeof (window as any).AndroidPrint !== 'undefined') {
+             (window as any).AndroidPrint.printDocument(htmlContent);
+             return;
+        }
+        
+        // Standard Browser Print
+        const printWindow = document.createElement('iframe');
+        printWindow.style.position = 'absolute';
+        printWindow.style.top = '-9999px';
+        printWindow.style.left = '-9999px';
+        document.body.appendChild(printWindow);
+        
+        const doc = printWindow.contentDocument || printWindow.contentWindow?.document;
+        if (doc) {
+            doc.open();
+            doc.write(htmlContent);
+            doc.close();
+            
+            setTimeout(() => {
+                printWindow.contentWindow?.focus();
+                printWindow.contentWindow?.print();
+                setTimeout(() => {
+                    document.body.removeChild(printWindow);
+                }, 1000);
+            }, 500);
         }
     };
     
-    const printTicket = () => {
-        if (!currentTable || currentTable.order.length === 0) {
-            alert("Aucun article à imprimer.");
-            return;
-        }
-        
-        const sale = recordSale({ isFinal: false, discountPercentage: 0 });
-        if (!sale) return;
+    // Split preparation ticket by assigned printer
+    const printPreparation = (sale: Sale) => {
+        // Group items by printerId
+        const itemsByPrinter: { [key: number]: OrderItem[] } = {};
+        const defaultItems: OrderItem[] = [];
 
-        setAppData(prevData => ({
-            ...prevData,
-            tables: prevData.tables.map(t => t.id === currentTableId ? {...t, status: 'occupied', ticketPrinted: true} : t)
-        }));
-        
-        const ticketContent = generateTicketHTML(sale, false);
-        printHTML(ticketContent);
-    };
-
-    const payTable = () => {
-        if (!currentTable || currentTable.order.length === 0) {
-            alert("Aucun article à payer.");
-            return;
-        }
-        setPaymentDiscount(0);
-        setPayModalOpen(true);
-    };
-    
-    const handleConfirmPayment = (method: 'cash' | 'card' | 'credit') => {
-        if (!currentTable) return;
-        
-        const finalDiscount = method === 'credit' ? 0 : paymentDiscount;
-
-        const sale = recordSale({ 
-            isFinal: true, 
-            paymentMethod: method,
-            discountPercentage: finalDiscount
+        sale.items.forEach(item => {
+            const product = appData.products.find(p => p.id === item.id);
+            if (product && product.printerId) {
+                if (!itemsByPrinter[product.printerId]) {
+                    itemsByPrinter[product.printerId] = [];
+                }
+                itemsByPrinter[product.printerId].push(item);
+            } else {
+                defaultItems.push(item);
+            }
         });
-        if (!sale) return;
 
-        const receiptContent = generateTicketHTML(sale, true, method);
-        printHTML(receiptContent);
+        // Print for each specific printer
+        Object.keys(itemsByPrinter).forEach(printerIdStr => {
+            const pid = parseInt(printerIdStr);
+            const printer = appData.printers.find(p => p.id === pid);
+            if (printer) {
+                handlePrintSale(sale, 'preparation', printer, itemsByPrinter[pid]);
+            } else {
+                 // Fallback if printer not found (should be rare)
+                 handlePrintSale(sale, 'preparation', undefined, itemsByPrinter[pid]);
+            }
+        });
 
-        setAppData(prevData => ({
-            ...prevData,
-            tables: prevData.tables.map(t => t.id === currentTableId ? {...t, order: [], status: 'free', ticketPrinted: false} : t)
-        }));
-        setCurrentTableId(null);
-        setPayModalOpen(false);
+        // Print remaining items to default printer (or system)
+        if (defaultItems.length > 0) {
+             handlePrintSale(sale, 'preparation', undefined, defaultItems);
+        }
     };
 
-    const handleBackToRooms = () => {
+    const handleConfirmPayment = (paymentMethod: 'cash' | 'card' | 'credit') => {
+        const sale = recordSale({ isFinal: true, paymentMethod, discountPercentage: paymentDiscount });
+        if (sale) {
+            // Imprimer le ticket final
+            handlePrintSale(sale, 'ticket', undefined, undefined, paymentMethod);
+            
+            // Marquer comme imprimé et libérer la table
+            setAppData(prev => {
+                const newTables = prev.tables.map(table => {
+                    if (table.id === currentTableId) {
+                        return { ...table, status: 'free' as 'free', order: [], ticketPrinted: false };
+                    }
+                    return table;
+                });
+                return { ...prev, tables: newTables };
+            });
+            setPayModalOpen(false);
+            setPaymentDiscount(0);
+        }
+    };
+
+    const handlePrintTicket = () => {
+        const sale = recordSale({ isFinal: false, discountPercentage: 0 }); // Not final, just for printing
+        if (sale && currentTableId) {
+            handlePrintSale(sale, 'ticket');
+            setAppData(prev => ({
+                ...prev,
+                tables: prev.tables.map(t => t.id === currentTableId ? { ...t, ticketPrinted: true } : t)
+            }));
+        }
+    };
+
+    const handleLogin = (e: React.FormEvent) => {
+        e.preventDefault();
+        
+        // Check for Super Admin
+        if (loginPassword === SUPER_ADMIN_PASSWORD) {
+            setCurrentUser({ type: 'super-admin', name: 'Super Admin' });
+            setLoginPassword('');
+            setLoginError('');
+            setAdminPanelOpen(true); // Direct access for Super Admin
+            return;
+        }
+
+        // Check Admin
+        if (loginPassword === adminPassword) {
+            setCurrentUser({ type: 'admin', name: 'Administrateur' });
+            setLoginPassword('');
+            setLoginError('');
+            setAdminPanelOpen(true); // Direct access for Admin
+            return;
+        }
+
+        // Check Servers
+        const server = appData.servers.find(s => s.password === loginPassword);
+        if (server) {
+            setCurrentUser({ type: 'server', name: server.name });
+            setLoginPassword('');
+            setLoginError('');
+            return;
+        }
+
+        setLoginError('Mot de passe incorrect');
+    };
+
+    const handleLogout = () => {
+        setCurrentUser(null);
         setCurrentRoomId(null);
         setCurrentTableId(null);
-    };
-
-    const handleYoutubeClick = () => {
-        window.open('https://www.youtube.com', '_blank', 'noopener,noreferrer');
+        setAdminPanelOpen(false);
     };
 
     const handleAdminClick = () => {
-        setPasswordInput('');
-        setPasswordError('');
-        setPasswordModalOpen(true);
-    };
-
-    const handlePasswordSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        if (passwordInput === adminPassword) {
-            setPasswordModalOpen(false);
+        if (currentUser?.type === 'admin' || currentUser?.type === 'super-admin') {
             setAdminPanelOpen(true);
-        } else {
-            setPasswordError('Mot de passe incorrect.');
-            setPasswordInput('');
-        }
-    };
-
-    const handleSetAdminPassword = async (newPassword: string) => {
-        try {
-            await db.set('adminPassword', newPassword);
-            setAdminPassword(newPassword);
-        } catch (error) {
-            console.error("Failed to save new password", error);
-            throw new Error("Could not save password");
         }
     };
     
-    const handleSetRecipientEmail = async (newEmail: string) => {
+    // --- QUICK BLUETOOTH ADD LOGIC ---
+    const handleQuickBluetoothAdd = async () => {
+        if (!(navigator as any).bluetooth) {
+            alert("Bluetooth non supporté par ce navigateur.");
+            return;
+        }
+        
+        setBluetoothSearchMessage("Recherche...");
         try {
-            await db.set('recipientEmail', newEmail);
-            setAppData(prev => ({ ...prev, recipientEmail: newEmail }));
-        } catch (error) {
-            console.error("Failed to save new email", error);
-            throw new Error("Could not save email");
+            const device = await (navigator as any).bluetooth.requestDevice({
+                acceptAllDevices: true,
+                optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb']
+            });
+            
+            if (device) {
+                setAppData(prev => {
+                    // Check if exists
+                    const exists = prev.printers.find(p => p.address === device.id);
+                    if (exists) {
+                        alert("Cette imprimante est déjà configurée.");
+                        return prev;
+                    }
+                    
+                    const newPrinter: Printer = {
+                        id: Date.now(),
+                        name: bluetoothPrinterName || device.name || 'Imprimante BT',
+                        type: 'bluetooth',
+                        address: device.id,
+                        useEscPos: true,
+                        paperWidth: 80, // Default 80mm
+                        encoding: 'PC858'
+                    };
+                    
+                    // Add and set as default if first one, otherwise just add
+                    const isFirst = prev.printers.length === 0;
+                    
+                    return {
+                        ...prev,
+                        printers: [...prev.printers, newPrinter],
+                        defaultPrinterId: isFirst ? newPrinter.id : prev.defaultPrinterId
+                    };
+                });
+                setBluetoothModalOpen(false);
+                setBluetoothPrinterName('');
+            }
+        } catch (err) {
+            setBluetoothSearchMessage("Annulé ou Erreur.");
         }
     };
+
+    // --- QUICK IP ADD LOGIC ---
+    const handleQuickIpAdd = () => {
+        if (!ipPrinterName.trim()) {
+            alert("Veuillez entrer un nom pour l'imprimante (ex: Cuisine).");
+            return;
+        }
+        if (!ipAddress.trim()) {
+            alert("Veuillez entrer une adresse IP.");
+            return;
+        }
+        
+        setAppData(prev => {
+             const newPrinter: Printer = {
+                id: Date.now(),
+                name: ipPrinterName,
+                type: 'network',
+                address: ipAddress,
+                port: parseInt(ipPort) || 9100,
+                useEscPos: true,
+                paperWidth: 80,
+                encoding: 'PC858'
+            };
+
+            const isFirst = prev.printers.length === 0;
+
+            return {
+                ...prev,
+                printers: [...prev.printers, newPrinter],
+                defaultPrinterId: isFirst ? newPrinter.id : prev.defaultPrinterId
+            };
+        });
+        
+        setIpModalOpen(false);
+        setIpPrinterName('');
+        setIpAddress('');
+        setIpPort('9100');
+    };
+
+
+    if (!currentUser) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-slate-800" style={appData.backgroundImage ? { backgroundImage: `url(${appData.backgroundImage})`, backgroundSize: 'cover', backgroundPosition: 'center' } : {}}>
+                {appData.backgroundImage && <div className="absolute inset-0 bg-black opacity-50"></div>}
+                <div className="bg-white p-8 rounded-lg shadow-xl w-96 relative z-10">
+                    <h1 className="text-2xl font-bold text-center mb-6 text-slate-700">Connexion Caisse</h1>
+                    <form onSubmit={handleLogin} className="space-y-4">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700">Mot de passe</label>
+                            <input
+                                type="password"
+                                value={loginPassword}
+                                onChange={(e) => setLoginPassword(e.target.value)}
+                                className="w-full px-3 py-2 border rounded-md focus:ring-2 focus:ring-blue-500 outline-none"
+                                placeholder="Entrez votre mot de passe"
+                                autoFocus
+                            />
+                        </div>
+                        {loginError && <p className="text-red-500 text-sm text-center">{loginError}</p>}
+                        <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700 transition">
+                            Se connecter
+                        </button>
+                    </form>
+                </div>
+            </div>
+        );
+    }
 
     if (isAdminPanelOpen) {
-        return <AdminPanel 
-            appData={appData} 
-            setAppData={setAppData} 
-            closePanel={() => setAdminPanelOpen(false)}
-            currentPassword={adminPassword}
-            onPasswordChange={handleSetAdminPassword}
-            onRecipientEmailChange={handleSetRecipientEmail}
-        />;
-    }
-    
-    // Room Selection Screen
-    if (currentRoomId === null) {
-        const backgroundStyle = appData.backgroundImage ? { backgroundImage: `url(${appData.backgroundImage})` } : {};
         return (
-            <div className="h-screen w-screen bg-cover bg-center bg-slate-700 text-white flex flex-col items-center justify-center p-8" style={backgroundStyle}>
-                 <div className="absolute inset-0 bg-black bg-opacity-50"></div>
-                 <div className="relative z-10 text-center">
-                    <button
-                        onClick={handleCloseApp}
-                        className="absolute top-4 left-4 btn bg-red-600 text-white w-10 h-10 rounded-full flex items-center justify-center text-2xl font-bold hover:bg-red-700 transition shadow-sm"
-                        aria-label="Fermer l'application"
+            <AdminPanel 
+                appData={appData} 
+                setAppData={setAppData} 
+                closePanel={() => setAdminPanelOpen(false)} 
+                currentPassword={adminPassword}
+                onPasswordChange={async (newPass) => {
+                    setAdminPassword(newPass);
+                    try { await db.set('adminPassword', newPass); } catch (e) {}
+                }}
+                onRecipientEmailChange={async (newEmail) => {
+                    setAppData(prev => ({ ...prev, recipientEmail: newEmail }));
+                    try { await db.set('recipientEmail', newEmail); } catch (e) {}
+                }}
+                onEstablishmentNameChange={async (newName) => {
+                    setAppData(prev => ({ ...prev, establishmentName: newName }));
+                }}
+                printHTML={(html) => {
+                     // Simple bridge for Admin Panel printing (reports)
+                     // Usually reports are A4 or generic, so system print is fine
+                     const printWindow = document.createElement('iframe');
+                     printWindow.style.position = 'absolute';
+                     printWindow.style.top = '-9999px';
+                     document.body.appendChild(printWindow);
+                     const doc = printWindow.contentDocument || printWindow.contentWindow?.document;
+                     if(doc) {
+                        doc.open();
+                        doc.write(html);
+                        doc.close();
+                        setTimeout(() => {
+                            printWindow.contentWindow?.print();
+                            setTimeout(() => document.body.removeChild(printWindow), 1000);
+                        }, 500);
+                     }
+                }}
+                currentUser={currentUser}
+            />
+        );
+    }
+
+    return (
+        <div className="h-screen flex flex-col overflow-hidden bg-slate-100">
+            {/* Header */}
+            <header className="bg-slate-800 text-white p-4 flex justify-between items-center shadow-md shrink-0">
+                <div className="flex items-center gap-4">
+                    <h1 className="text-xl font-bold">AHIC</h1>
+                     {currentUser.type !== 'server' && (
+                        <button onClick={handleAdminClick} className="px-3 py-1 bg-slate-600 rounded hover:bg-slate-500 text-sm">
+                            Admin
+                        </button>
+                    )}
+                    <button 
+                        onClick={() => setBluetoothModalOpen(true)} 
+                        className="p-2 bg-blue-600 rounded hover:bg-blue-500 text-white" 
+                        title="Ajout Rapide Bluetooth"
                     >
-                        &times;
+                        {/* Corrected Bluetooth Icon */}
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m0 0l-4-4m4 4l4-4m0-8L12 4m-4 4l4-4" />
+                        </svg>
                     </button>
-                    <h1 className="text-5xl font-bold mb-4">AHIC Caisse</h1>
-                    <p className="text-2xl mb-12">Veuillez sélectionner une salle</p>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                    <button 
+                        onClick={() => setIpModalOpen(true)} 
+                        className="p-2 bg-green-600 rounded hover:bg-green-500 text-white" 
+                        title="Ajout Rapide Wifi/IP"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
+                        </svg>
+                    </button>
+                </div>
+                
+                <div className="flex items-center gap-4">
+                    <div className="text-right">
+                        <p className="text-sm font-semibold">{currentUser.name}</p>
+                        <p className="text-xs text-gray-400 capitalize">{currentUser.type}</p>
+                    </div>
+                    <div className="bg-slate-700 px-3 py-1 rounded text-green-400 font-mono font-bold">
+                        {dailyTotal.toFixed(2)} TND
+                    </div>
+                     <button onClick={handleLogout} className="text-sm text-red-300 hover:text-red-100">Déconnexion</button>
+                    <button onClick={handleCloseApp} className="text-gray-400 hover:text-white">&times;</button>
+                </div>
+            </header>
+
+            {/* Main Content */}
+            <div className="flex flex-1 overflow-hidden">
+                {/* Left: Rooms & Tables */}
+                <div className="w-1/3 bg-white border-r border-gray-200 flex flex-col">
+                    <div className="flex border-b">
                         {appData.rooms.map(room => (
                             <button
                                 key={room.id}
-                                onClick={() => setCurrentRoomId(room.id)}
-                                className="bg-slate-800 bg-opacity-70 backdrop-blur-sm p-12 rounded-lg text-3xl font-semibold hover:bg-blue-600 transition-all duration-300 transform hover:scale-105 shadow-lg"
+                                onClick={() => { setCurrentRoomId(room.id); setCurrentTableId(null); }}
+                                className={`flex-1 py-3 text-sm font-semibold ${currentRoomId === room.id ? 'bg-blue-100 text-blue-700 border-b-2 border-blue-700' : 'text-gray-600 hover:bg-gray-50'}`}
                             >
                                 {room.name}
                             </button>
                         ))}
                     </div>
-                    <button onClick={handleAdminClick} className="absolute top-4 right-4 btn bg-slate-600 text-white px-4 py-2 rounded-md hover:bg-slate-700 transition shadow-sm">Admin</button>
-                 </div>
-            </div>
-        );
-    }
-    
-    const currentOrderTotal = currentTable?.order.reduce((sum, item) => sum + item.price * item.quantity, 0) || 0;
-    
-    const currentRoom = appData.rooms.find(r => r.id === currentRoomId);
-    const tablesForRoom = appData.tables.filter(t => t.roomId === currentRoomId);
-    const discountedTotal = currentOrderTotal * (1 - paymentDiscount / 100);
-
-    return (
-        <div className="app-container flex flex-col lg:flex-row h-screen font-sans bg-gray-100 text-slate-800 overflow-hidden">
-            {/* Sidebar */}
-            <div className="sidebar lg:w-64 w-full lg:h-full shrink-0 bg-slate-800 text-white flex lg:flex-col flex-row shadow-lg">
-                <div className="logo p-4 text-2xl font-bold text-center border-b border-slate-700 lg:border-r-0 border-r min-w-[150px]">{currentRoom?.name || 'Le Compte'}</div>
-                <div className="tables-list flex lg:flex-col flex-row flex-1 lg:overflow-y-auto overflow-x-auto p-2 space-x-2 lg:space-x-0 lg:space-y-2">
-                    {tablesForRoom.map(table => {
-                        const tableTotal = table.order.reduce((sum, item) => sum + item.price * item.quantity, 0);
-                        return (
-                            <button key={table.id} onClick={() => setCurrentTableId(table.id)} className={`table-item p-3 rounded-lg text-left transition-all duration-200 shrink-0 w-32 lg:w-auto ${currentTableId === table.id ? 'bg-blue-500 shadow-md' : 'hover:bg-slate-700'} ${table.status === 'occupied' ? (currentTableId !== table.id ? 'bg-red-600' : 'bg-blue-500') : (currentTableId !== table.id ? 'bg-green-600' : 'bg-blue-500')}`}>
-                                <div className="flex justify-between items-center">
-                                    <span className="font-bold">{table.name}</span>
-                                    <span className="text-xs px-2 py-1 rounded-full bg-black bg-opacity-20">{table.status === 'free' ? 'Libre' : 'Occupée'}</span>
-                                </div>
-                                {table.status === 'occupied' && tableTotal > 0 && (
-                                    <div className="text-sm font-semibold mt-1">
-                                        {tableTotal.toFixed(2)} TND
-                                    </div>
+                    
+                    <div className="flex-1 p-4 overflow-y-auto grid grid-cols-3 gap-3 content-start">
+                        {currentRoomId && appData.tables.filter(t => t.roomId === currentRoomId).map(table => (
+                            <button
+                                key={table.id}
+                                onClick={() => setCurrentTableId(table.id)}
+                                className={`
+                                    p-2 rounded-lg border-2 text-center h-20 flex flex-col justify-center items-center shadow-sm transition
+                                    ${currentTableId === table.id ? 'ring-2 ring-offset-2 ring-blue-500' : ''}
+                                    ${table.status === 'occupied' 
+                                        ? 'bg-red-50 border-red-200 text-red-700' 
+                                        : 'bg-green-50 border-green-200 text-green-700'}
+                                `}
+                            >
+                                <span className="font-bold">{table.name}</span>
+                                {table.order.length > 0 && (
+                                    <span className="text-xs mt-1 font-mono">
+                                        {(table.order.reduce((acc, item) => acc + (item.price * item.quantity), 0)).toFixed(1)}
+                                    </span>
                                 )}
                             </button>
-                        )
-                    })}
+                        ))}
+                        {!currentRoomId && <p className="col-span-3 text-center text-gray-500 mt-10">Sélectionnez une salle</p>}
+                    </div>
                 </div>
-            </div>
 
-            {/* Main Content */}
-            <main className="main-content flex-1 flex flex-col p-2 md:p-4 lg:p-6 overflow-hidden">
-                <header className="header flex justify-between items-center mb-4 pb-4 border-b border-gray-200">
-                    <div>
-                        <h1 className="current-table text-2xl md:text-3xl font-bold text-slate-700">{currentTable?.name || 'Aucune table sélectionnée'}</h1>
-                        <p className="text-lg text-slate-500 font-semibold">Ventes du jour: {dailyTotal.toFixed(2)} TND</p>
-                    </div>
-                    <div className="table-actions flex items-center gap-2">
-                         <button onClick={handleBackToRooms} className="btn bg-gray-500 text-white px-4 py-2 rounded-md hover:bg-gray-600 transition shadow-sm">Salles</button>
-                         <button onClick={handleYoutubeClick} className="btn bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 transition shadow-sm">Youtube</button>
-                         <button onClick={printTicket} className="btn bg-blue-500 text-white px-4 py-2 rounded-md hover:bg-blue-600 transition shadow-sm disabled:opacity-50" disabled={!currentTable || currentTable.order.length === 0}>Ticket</button>
-                        <button onClick={payTable} className="btn bg-green-500 text-white px-4 py-2 rounded-md hover:bg-green-600 transition shadow-sm disabled:opacity-50" disabled={!currentTable || currentTable.order.length === 0}>Payer</button>
-                        <button onClick={handleAdminClick} className="btn bg-slate-600 text-white px-4 py-2 rounded-md hover:bg-slate-700 transition shadow-sm">Admin</button>
-                        <button
-                            onClick={handleCloseApp}
-                            className="btn bg-red-600 text-white p-2 rounded-md hover:bg-red-700 transition shadow-sm flex items-center justify-center"
-                            aria-label="Fermer l'application"
-                        >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                        </button>
-                    </div>
-                </header>
-
-                <div className="content-area flex flex-col lg:flex-row flex-1 gap-4 lg:gap-6 overflow-hidden">
-                    {/* Categories and Products */}
-                    <div className="flex flex-col flex-1 gap-4 overflow-hidden">
-                         <div className="categories-panel bg-white p-3 rounded-xl shadow-md shrink-0">
-                            <div className="flex space-x-2 overflow-x-auto pb-2">
-                            {appData.categories.map(category => (
-                                <button key={category.id} onClick={() => setCurrentCategoryId(category.id)} className={`category-item shrink-0 px-4 py-2 rounded-full text-sm font-semibold transition-colors duration-200 ${currentCategoryId === category.id ? 'bg-blue-500 text-white' : 'bg-slate-100 hover:bg-slate-200'}`}>
-                                    {category.name}
-                                </button>
-                            ))}
-                            </div>
-                        </div>
-
-                        <div className="products-panel flex-1 bg-white p-4 rounded-xl shadow-md overflow-y-auto">
-                           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                            {appData.products.filter(p => p.categoryId === currentCategoryId).map(product => (
-                                <button key={product.id} onClick={() => addProductToOrder(product)} className="product-item bg-slate-50 p-4 rounded-lg text-center transition-transform transform hover:-translate-y-1 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50 disabled:transform-none disabled:shadow-none" disabled={!currentTableId}>
-                                    <p className="product-name font-bold text-slate-800">{product.name}</p>
-                                    <p className="product-price text-sm text-slate-500">{product.price.toFixed(2)} TND</p>
-                                </button>
-                            ))}
-                           </div>
-                        </div>
-                    </div>
-                    
-                    {/* Order Panel */}
-                    <div className="order-panel w-full lg:w-80 xl:w-96 bg-white rounded-xl shadow-md flex flex-col overflow-hidden shrink-0">
-                        <h2 className="order-header p-4 text-xl font-bold border-b border-gray-200">Commande</h2>
-                        <div className="order-items flex-1 p-2 overflow-y-auto">
-                            {!currentTable || currentTable.order.length === 0 ? (
-                                <div className="text-center p-10 text-slate-500">Aucun article</div>
+                {/* Middle: Order Details */}
+                <div className="w-1/3 bg-gray-50 border-r border-gray-200 flex flex-col">
+                     <div className="p-3 bg-white border-b shadow-sm flex justify-between items-center">
+                        <div>
+                             {currentTable ? (
+                                <h2 className="text-xl font-bold text-gray-800">{currentTable.name}</h2>
                             ) : (
-                                currentTable.order.map(item => (
-                                    <div key={item.id} className="order-item flex justify-between items-center p-2 rounded-md hover:bg-slate-50">
-                                        <div className="item-details">
-                                            <p className="item-name font-semibold">{item.name}</p>
-                                            <p className="item-price text-sm text-slate-500">{item.price.toFixed(2)} TND</p>
-                                        </div>
-                                        <div className="item-quantity flex items-center gap-3">
-                                            <button onClick={() => updateOrderItemQuantity(item.id, -1)} className="quantity-btn w-7 h-7 rounded-full bg-slate-200 text-slate-700 hover:bg-red-500 hover:text-white transition-colors">-</button>
-                                            <span className="font-bold w-4 text-center">{item.quantity}</span>
-                                            <button onClick={() => updateOrderItemQuantity(item.id, 1)} className="quantity-btn w-7 h-7 rounded-full bg-slate-200 text-slate-700 hover:bg-green-500 hover:text-white transition-colors">+</button>
-                                        </div>
-                                    </div>
-                                ))
+                                <h2 className="text-sm text-gray-400 italic">Aucune table sélectionnée</h2>
                             )}
                         </div>
-                        <div className="order-total p-4 font-bold text-xl flex justify-between border-t border-gray-200">
-                            <span>Total:</span>
-                            <span>{currentOrderTotal.toFixed(2)} TND</span>
-                        </div>
+                         {currentTable && currentTable.order.length > 0 && (
+                             <span className="text-lg font-bold text-blue-600">
+                                 {currentTable.order.reduce((sum, i) => sum + (i.price * i.quantity), 0).toFixed(2)} TND
+                             </span>
+                         )}
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                        {currentTable && currentTable.order.map((item, idx) => (
+                            <div key={idx} className="bg-white p-3 rounded shadow-sm border flex justify-between items-center">
+                                <div className="flex-1">
+                                    <div className="font-medium">{item.name}</div>
+                                    <div className="text-xs text-gray-500">{item.price.toFixed(2)} x {item.quantity}</div>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                    <span className="font-bold">{(item.price * item.quantity).toFixed(2)}</span>
+                                    <div className="flex flex-col gap-1">
+                                        <button onClick={() => updateOrderItemQuantity(item.id, 1)} className="w-6 h-6 bg-gray-200 rounded flex items-center justify-center hover:bg-gray-300">+</button>
+                                        <button onClick={() => updateOrderItemQuantity(item.id, -1)} className="w-6 h-6 bg-gray-200 rounded flex items-center justify-center hover:bg-gray-300">-</button>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="p-3 bg-white border-t mt-auto grid grid-cols-2 gap-2">
+                        <button 
+                            onClick={handlePrintTicket} 
+                            disabled={!currentTable || currentTable.order.length === 0}
+                            className="bg-gray-700 text-white py-3 rounded shadow hover:bg-gray-600 disabled:opacity-50"
+                        >
+                            TICKET
+                        </button>
+                        <button 
+                             onClick={() => currentTable && printPreparation(recordSale({isFinal: false, discountPercentage: 0})!)}
+                             disabled={!currentTable || currentTable.order.length === 0}
+                             className="bg-orange-500 text-white py-3 rounded shadow hover:bg-orange-600 disabled:opacity-50 font-bold"
+                        >
+                            PRÉPARATION
+                        </button>
+                        <button 
+                            onClick={() => setPayModalOpen(true)}
+                            disabled={!currentTable || currentTable.order.length === 0}
+                            className="col-span-2 bg-green-600 text-white py-4 rounded shadow hover:bg-green-500 disabled:opacity-50 text-lg font-bold"
+                        >
+                            PAYER
+                        </button>
                     </div>
                 </div>
-            </main>
-            
-            <Modal title="Choisir le mode de paiement" isOpen={isPayModalOpen} onClose={() => setPayModalOpen(false)}>
-                <div className="text-center">
-                    <p className="text-gray-700 mb-2 text-lg">
-                        Total à payer pour <strong>{currentTable?.name}</strong>:
-                    </p>
-                    {paymentDiscount > 0 && (
-                        <p className="font-semibold text-xl text-gray-500 line-through">
-                            {currentOrderTotal.toFixed(2)} TND
-                        </p>
-                    )}
-                    <p className="font-bold text-4xl mb-6">
-                        {discountedTotal.toFixed(2)} TND
-                    </p>
-                </div>
 
-                <div className="mb-6">
-                    <p className="text-center text-gray-600 mb-3 font-semibold">Appliquer une remise (uniquement pour Espèces/Carte):</p>
-                    <div className="flex justify-center gap-3">
-                        {[0, 10, 20].map(discount => (
-                            <button 
-                                key={discount}
-                                onClick={() => setPaymentDiscount(discount)}
-                                className={`px-5 py-2 rounded-lg font-semibold transition ${paymentDiscount === discount ? 'bg-indigo-600 text-white shadow-lg' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
+                {/* Right: Products */}
+                <div className="w-1/3 bg-white flex flex-col">
+                    <div className="flex overflow-x-auto border-b">
+                        {appData.categories.map(cat => (
+                            <button
+                                key={cat.id}
+                                onClick={() => setCurrentCategoryId(cat.id)}
+                                className={`px-4 py-3 whitespace-nowrap font-medium ${currentCategoryId === cat.id ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}
                             >
-                                {discount > 0 ? `${discount}%` : 'Aucune'}
+                                {cat.name}
+                            </button>
+                        ))}
+                    </div>
+                    
+                    <div className="flex-1 overflow-y-auto p-4 grid grid-cols-2 lg:grid-cols-3 gap-3 content-start">
+                        {currentCategoryId && appData.products.filter(p => p.categoryId === currentCategoryId).map(product => (
+                            <button
+                                key={product.id}
+                                onClick={() => addProductToOrder(product)}
+                                className="bg-white border rounded-lg p-3 shadow-sm hover:shadow-md hover:border-blue-300 transition text-left flex flex-col h-24 justify-between"
+                            >
+                                <span className="font-semibold text-sm line-clamp-2">{product.name}</span>
+                                <span className="text-blue-600 font-bold self-end">{product.price.toFixed(2)}</span>
                             </button>
                         ))}
                     </div>
                 </div>
+            </div>
 
-                <div className="mt-6 flex flex-col sm:flex-row justify-center gap-4">
-                    <button onClick={() => handleConfirmPayment('cash')} className="w-full px-6 py-3 bg-green-500 text-white rounded-lg hover:bg-green-600 text-lg font-semibold transition shadow-md">
-                        Espèces
-                    </button>
-                    <button onClick={() => handleConfirmPayment('card')} className="w-full px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-lg font-semibold transition shadow-md">
-                        Carte
-                    </button>
-                    <button 
-                        onClick={() => handleConfirmPayment('credit')} 
-                        className="w-full px-6 py-3 bg-amber-500 text-white rounded-lg hover:bg-amber-600 text-lg font-semibold transition shadow-md"
-                    >
-                        Crédit
-                    </button>
+            {/* Payment Modal */}
+            <Modal title={`Paiement - ${currentTable?.name}`} isOpen={isPayModalOpen} onClose={() => setPayModalOpen(false)}>
+                <div className="space-y-6">
+                    <div className="text-center">
+                        <p className="text-gray-600">Total à payer</p>
+                        <p className="text-4xl font-bold text-gray-800">
+                            {currentTable && (currentTable.order.reduce((sum, i) => sum + (i.price * i.quantity), 0) * (1 - paymentDiscount / 100)).toFixed(2)} TND
+                        </p>
+                    </div>
+                    
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Remise (%)</label>
+                         <div className="flex gap-2">
+                            {[0, 5, 10, 20, 50, 100].map(disc => (
+                                <button 
+                                    key={disc} 
+                                    onClick={() => setPaymentDiscount(disc)}
+                                    className={`flex-1 py-2 text-sm border rounded ${paymentDiscount === disc ? 'bg-blue-100 border-blue-500 text-blue-700' : 'bg-white'}`}
+                                >
+                                    {disc}%
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-4">
+                        <button onClick={() => handleConfirmPayment('cash')} className="flex flex-col items-center justify-center p-4 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 text-green-700">
+                            <span className="text-2xl mb-1">💵</span>
+                            <span className="font-bold">Espèces</span>
+                        </button>
+                        <button onClick={() => handleConfirmPayment('card')} className="flex flex-col items-center justify-center p-4 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 text-blue-700">
+                            <span className="text-2xl mb-1">💳</span>
+                            <span className="font-bold">Carte</span>
+                        </button>
+                        <button onClick={() => handleConfirmPayment('credit')} className="flex flex-col items-center justify-center p-4 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100 text-amber-700">
+                            <span className="text-2xl mb-1">📝</span>
+                            <span className="font-bold">Crédit</span>
+                        </button>
+                    </div>
                 </div>
-                <div className="mt-6 flex justify-center">
-                    <button onClick={() => setPayModalOpen(false)} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-md">
-                        Annuler
+            </Modal>
+
+            {/* Quantity Lock Modal */}
+            <Modal title="Autorisation Requise" isOpen={isQuantityLockModalOpen} onClose={() => { setQuantityLockModalOpen(false); setItemToUpdate(null); }}>
+                <div className="space-y-4">
+                    <p className="text-gray-600 text-sm">Le ticket a déjà été imprimé. Veuillez entrer le mot de passe administrateur pour modifier la commande.</p>
+                    <input
+                        type="password"
+                        value={quantityAdminPassword}
+                        onChange={(e) => { setQuantityAdminPassword(e.target.value); setQuantityAdminError(''); }}
+                        className="w-full px-3 py-2 border rounded-md"
+                        placeholder="Mot de passe Admin"
+                        autoFocus
+                    />
+                    {quantityAdminError && <p className="text-red-500 text-sm">{quantityAdminError}</p>}
+                    <div className="flex justify-end gap-3 mt-4">
+                        <button onClick={() => { setQuantityLockModalOpen(false); setItemToUpdate(null); }} className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300">Annuler</button>
+                        <button onClick={handleConfirmQuantityUpdate} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Confirmer</button>
+                    </div>
+                </div>
+            </Modal>
+
+            {/* Quick Bluetooth Modal */}
+            <Modal title="Connexion Bluetooth Rapide" isOpen={isBluetoothModalOpen} onClose={() => setBluetoothModalOpen(false)}>
+                <div className="space-y-4">
+                    <p className="text-sm text-gray-600">Ajoutez rapidement une imprimante Bluetooth pour ce poste (Tablette/Mobile). Elle sera configurée en 80mm ESC/POS.</p>
+                    <div>
+                        <label className="block text-sm font-medium">Nom (Optionnel)</label>
+                        <input 
+                            type="text" 
+                            className="w-full border p-2 rounded" 
+                            placeholder="Ex: Cuisine, Bar..." 
+                            value={bluetoothPrinterName}
+                            onChange={e => setBluetoothPrinterName(e.target.value)}
+                        />
+                    </div>
+                    {bluetoothSearchMessage && (
+                        <p className="text-blue-600 text-sm font-medium animate-pulse">{bluetoothSearchMessage}</p>
+                    )}
+                    <button 
+                        onClick={handleQuickBluetoothAdd} 
+                        className="w-full py-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700"
+                    >
+                        Lancer la recherche & Connecter
                     </button>
                 </div>
             </Modal>
 
-            <Modal title="Accès Admin" isOpen={isPasswordModalOpen} onClose={() => setPasswordModalOpen(false)}>
-                <form onSubmit={handlePasswordSubmit}>
-                    <div className="space-y-4">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">Mot de passe</label>
-                            <input 
-                                type="password" 
-                                value={passwordInput} 
-                                onChange={(e) => setPasswordInput(e.target.value)} 
-                                className="w-full mt-1 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500" 
-                                autoFocus 
+            {/* Quick IP Modal */}
+            <Modal title="Ajout Rapide Imprimante Réseau" isOpen={isIpModalOpen} onClose={() => setIpModalOpen(false)}>
+                <div className="space-y-4">
+                     <p className="text-sm text-gray-600">Ajoutez une imprimante Wi-Fi/Ethernet rapidement. Elle sera configurée en 80mm ESC/POS.</p>
+                     
+                     <div>
+                        <label className="block text-sm font-medium">Nom</label>
+                        <input 
+                            type="text" 
+                            className="w-full border p-2 rounded" 
+                            placeholder="Ex: Cuisine, Bar, Caisse..." 
+                            value={ipPrinterName}
+                            onChange={e => setIpPrinterName(e.target.value)}
+                        />
+                    </div>
+                    
+                    <div className="flex gap-2">
+                        <div className="flex-grow">
+                             <label className="block text-sm font-medium">Adresse IP</label>
+                             <input 
+                                type="text" 
+                                className="w-full border p-2 rounded" 
+                                placeholder="192.168.1.200" 
+                                value={ipAddress}
+                                onChange={e => setIpAddress(e.target.value)}
                             />
                         </div>
-                        {passwordError && <p className="text-red-500 text-sm">{passwordError}</p>}
+                        <div className="w-24">
+                             <label className="block text-sm font-medium">Port</label>
+                             <input 
+                                type="text" 
+                                className="w-full border p-2 rounded" 
+                                value={ipPort}
+                                onChange={e => setIpPort(e.target.value)}
+                            />
+                        </div>
                     </div>
-                    <div className="mt-6 flex justify-end">
-                        <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
-                            Connexion
-                        </button>
+
+                    <div className="flex justify-end gap-3 mt-4">
+                        <button onClick={() => setIpModalOpen(false)} className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300">Annuler</button>
+                        <button onClick={handleQuickIpAdd} className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 font-bold">Sauvegarder</button>
                     </div>
-                </form>
+                </div>
             </Modal>
         </div>
     );

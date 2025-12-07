@@ -31,10 +31,12 @@ export interface Product {
   name: string;
   categoryId: number;
   price: number;
+  printerId?: number; // ID of the specific printer for preparation tickets
 }
 
 export interface Sale {
   id: number;
+  dailySequence: number;
   tableId: number;
   tableName: string;
   roomName: string;
@@ -46,6 +48,8 @@ export interface Sale {
   isFinal: boolean;
   paymentMethod?: 'cash' | 'card' | 'credit';
   closingReportId?: number;
+  status?: 'active' | 'voided';
+  serverName?: string;
 }
 
 export interface ClosingReport {
@@ -58,6 +62,30 @@ export interface ClosingReport {
     cardTotal: number;
     creditTotal: number;
     itemsSummary: { [key: string]: { quantity: number; total: number } };
+    voidedSalesIds?: number[];
+    voidedTotal?: number;
+    voidedItemsSummary?: { [key: string]: { quantity: number; total: number } };
+}
+
+export type PrinterType = 'system' | 'network' | 'bluetooth' | 'usb';
+
+export interface Printer {
+  id: number;
+  name: string;
+  type: PrinterType;
+  address?: string; // For IP or MAC address
+  port?: number; // For network printers
+  
+  // ESC/POS Configuration (Raw Printing like python-escpos)
+  useEscPos?: boolean;
+  paperWidth?: 58 | 80; // mm
+  encoding?: string; // e.g., 'PC858', 'PC437', 'UTF-8'
+}
+
+export interface Server {
+  id: number;
+  name: string;
+  password: string;
 }
 
 export interface AppData {
@@ -69,4 +97,9 @@ export interface AppData {
   closingReports: ClosingReport[];
   backgroundImage: string | null;
   recipientEmail: string;
+  printers: Printer[];
+  defaultPrinterId: number | null;
+  servers: Server[];
+  saleSequence: number;
+  establishmentName: string;
 }
