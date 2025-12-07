@@ -1,14 +1,14 @@
 {
   "short_name": "AHIC",
-  "name": "AHIC Insights Caisse",
+  "name": "AHICaisse",
   "icons": [
     {
-      "src": "/logo.png",
+      "src": "/icons/icon-192x192.png",
       "type": "image/png",
       "sizes": "192x192"
     },
     {
-      "src": "/logo.png",
+      "src": "/icons/icon-512x512.png",
       "type": "image/png",
       "sizes": "512x512"
     }

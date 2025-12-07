@@ -24,6 +24,7 @@ export interface Table {
 export interface Category {
   id: number;
   name: string;
+  printerId?: number; // ID of the specific printer for this category (e.g., Kitchen, Bar)
 }
 
 export interface Product {
@@ -31,7 +32,6 @@ export interface Product {
   name: string;
   categoryId: number;
   price: number;
-  printerId?: number; // ID of the specific printer for preparation tickets
 }
 
 export interface Sale {

@@ -439,7 +439,6 @@ const App: React.FC = () => {
                     ` : ''}
                     <div class="footer">
                        <p>Merci de votre visite !</p>
-                       <br/><br/><br/><br/>
                     </div>
                 </body>
             </html>
@@ -493,7 +492,6 @@ const App: React.FC = () => {
                             `).join('')}
                         </tbody>
                     </table>
-                    <br/><br/><br/><br/>
                 </body>
             </html>
         `;
@@ -536,10 +534,7 @@ const App: React.FC = () => {
                 let method = paymentMethod === 'cash' ? 'Especes' : paymentMethod === 'card' ? 'Carte' : 'Credit';
                 text += `[R]Paye par: ${method}\n`;
             }
-            text += `[C]\n[C]Merci de votre visite !\n`;
-            // Add 4 lines feed and Partial Cut command (ESC/POS GS V 1)
-            text += `[L]\n[L]\n[L]\n[L]\n`;
-            text += `\x1dV\x01`;
+            text += `[C]\n[C]Merci de votre visite !\n[L]\n[L]\n`;
 
         } else if (type === 'preparation') {
             const itemsToPrint = itemsOverride || sale.items;
@@ -553,9 +548,7 @@ const App: React.FC = () => {
             itemsToPrint.forEach(item => {
                  text += `[L]<b><font size='big'>${item.quantity} x  ${item.name}</font></b>\n`;
             });
-            // Add 4 lines feed and Partial Cut command (ESC/POS GS V 1)
-            text += `[L]\n[L]\n[L]\n[L]\n`;
-            text += `\x1dV\x01`;
+            text += `[L]\n[L]\n`;
         }
         
         return text;
@@ -637,19 +630,24 @@ const App: React.FC = () => {
         }
     };
     
-    // Split preparation ticket by assigned printer
+    // Split preparation ticket by assigned printer (Category Based)
     const printPreparation = (sale: Sale) => {
-        // Group items by printerId
+        // Group items by printerId (from Category)
         const itemsByPrinter: { [key: number]: OrderItem[] } = {};
         const defaultItems: OrderItem[] = [];
 
         sale.items.forEach(item => {
             const product = appData.products.find(p => p.id === item.id);
-            if (product && product.printerId) {
-                if (!itemsByPrinter[product.printerId]) {
-                    itemsByPrinter[product.printerId] = [];
+            if (product) {
+                const category = appData.categories.find(c => c.id === product.categoryId);
+                if (category && category.printerId) {
+                    if (!itemsByPrinter[category.printerId]) {
+                        itemsByPrinter[category.printerId] = [];
+                    }
+                    itemsByPrinter[category.printerId].push(item);
+                } else {
+                    defaultItems.push(item);
                 }
-                itemsByPrinter[product.printerId].push(item);
             } else {
                 defaultItems.push(item);
             }
@@ -914,7 +912,7 @@ const App: React.FC = () => {
             {/* Header */}
             <header className="bg-slate-800 text-white p-4 flex justify-between items-center shadow-md shrink-0">
                 <div className="flex items-center gap-4">
-                    <h1 className="text-xl font-bold">AHIC</h1>
+                    <h1 className="text-xl font-bold">Bar POS</h1>
                      {currentUser.type !== 'server' && (
                         <button onClick={handleAdminClick} className="px-3 py-1 bg-slate-600 rounded hover:bg-slate-500 text-sm">
                             Admin

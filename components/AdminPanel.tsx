@@ -43,13 +43,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ appData, setAppData, clo
     // Product State
     const [isProductModalOpen, setProductModalOpen] = useState(false);
     const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-    const [productForm, setProductForm] = useState({ name: '', price: '', categoryId: '', printerId: '' });
+    const [productForm, setProductForm] = useState({ name: '', price: '', categoryId: '' });
     const [productToDelete, setProductToDelete] = useState<Product | null>(null);
     
     // Category State
     const [isCategoryModalOpen, setCategoryModalOpen] = useState(false);
     const [editingCategory, setEditingCategory] = useState<Category | null>(null);
-    const [categoryForm, setCategoryForm] = useState({ name: '' });
+    const [categoryForm, setCategoryForm] = useState({ name: '', printerId: '' });
     const [categoryToDelete, setCategoryToDelete] = useState<Category | null>(null);
 
     // Printer State
@@ -147,13 +147,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ appData, setAppData, clo
             const name = productForm.name.trim();
             const price = parseFloat(productForm.price);
             const categoryId = parseInt(productForm.categoryId, 10);
-            const printerId = productForm.printerId ? parseInt(productForm.printerId, 10) : undefined;
 
             if (
                 editingProduct.name === name &&
                 editingProduct.price === price &&
-                editingProduct.categoryId === categoryId &&
-                editingProduct.printerId === printerId
+                editingProduct.categoryId === categoryId
             ) {
                 return;
             }
@@ -167,7 +165,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ appData, setAppData, clo
                 name,
                 price,
                 categoryId,
-                printerId
             };
 
             setAppData(prev => ({
@@ -201,7 +198,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ appData, setAppData, clo
 
     const openAddProductModal = () => {
         setEditingProduct(null);
-        setProductForm({ name: '', price: '', categoryId: appData.categories[0]?.id.toString() || '', printerId: '' });
+        setProductForm({ name: '', price: '', categoryId: appData.categories[0]?.id.toString() || '' });
         setProductModalOpen(true);
     };
 
@@ -211,13 +208,12 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ appData, setAppData, clo
             name: product.name,
             price: product.price.toString(),
             categoryId: product.categoryId.toString(),
-            printerId: product.printerId ? product.printerId.toString() : ''
         });
         setProductModalOpen(true);
     };
 
     const handleSaveProduct = () => {
-        const { name, price, categoryId, printerId } = productForm;
+        const { name, price, categoryId } = productForm;
         if (!name.trim() || !price || !categoryId) {
             alert("Veuillez remplir tous les champs obligatoires.");
             return;
@@ -228,7 +224,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ appData, setAppData, clo
             name: name.trim(),
             price: parseFloat(price),
             categoryId: parseInt(categoryId),
-            printerId: printerId ? parseInt(printerId) : undefined
         };
 
         if (editingProduct) {
@@ -261,33 +256,35 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ appData, setAppData, clo
     // ... (Category, Server, Room, Table, Printer Handlers)
     const openAddCategoryModal = () => {
         setEditingCategory(null);
-        setCategoryForm({ name: '' });
+        setCategoryForm({ name: '', printerId: '' });
         setCategoryModalOpen(true);
     };
 
     const openEditCategoryModal = (category: Category) => {
         setEditingCategory(category);
-        setCategoryForm({ name: category.name });
+        setCategoryForm({ name: category.name, printerId: category.printerId ? category.printerId.toString() : '' });
         setCategoryModalOpen(true);
     };
 
     const handleSaveCategory = () => {
-        const { name } = categoryForm;
+        const { name, printerId } = categoryForm;
         if (!name.trim()) {
             alert("Veuillez entrer un nom de catégorie.");
             return;
         }
 
+        const newCategory: Category = {
+            id: editingCategory ? editingCategory.id : Date.now(),
+            name: name.trim(),
+            printerId: printerId ? parseInt(printerId) : undefined
+        };
+
         if (editingCategory) {
             setAppData(prev => ({
                 ...prev,
-                categories: prev.categories.map(c => c.id === editingCategory.id ? { ...c, name: name.trim() } : c)
+                categories: prev.categories.map(c => c.id === editingCategory.id ? newCategory : c)
             }));
         } else {
-            const newCategory = {
-                id: Date.now(),
-                name: name.trim(),
-            };
             setAppData(prev => ({
                 ...prev,
                 categories: [...prev.categories, newCategory]
@@ -1490,23 +1487,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ appData, setAppData, clo
                 <button onClick={openAddProductModal} className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600">Ajouter un produit</button>
             </div>
             <div className="bg-white rounded-lg shadow overflow-hidden">
-                <div className="grid grid-cols-5 font-bold p-3 bg-gray-50 border-b">
+                <div className="grid grid-cols-4 font-bold p-3 bg-gray-50 border-b">
                     <div>Nom</div>
                     <div>Catégorie</div>
                     <div>Prix</div>
-                    <div>Imprimante</div>
                     <div>Actions</div>
                 </div>
                 <div className="divide-y divide-gray-200 max-h-[60vh] overflow-y-auto">
                 {appData.products.map(product => {
                     const category = appData.categories.find(c => c.id === product.categoryId);
-                    const printer = appData.printers.find(p => p.id === product.printerId);
                     return (
-                        <div key={product.id} className="grid grid-cols-5 p-3 items-center">
+                        <div key={product.id} className="grid grid-cols-4 p-3 items-center">
                             <div>{product.name}</div>
                             <div>{category?.name || 'N/A'}</div>
                             <div>{product.price.toFixed(2)} TND</div>
-                            <div className="text-sm text-gray-600 truncate px-1">{printer ? printer.name : 'Par Défaut'}</div>
                             <div className="flex gap-2">
                                 <button onClick={() => openEditProductModal(product)} className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600">Modifier</button>
                                 <button onClick={() => requestDeleteProduct(product)} className="px-3 py-1 text-sm bg-red-500 text-white rounded hover:bg-red-600">Supprimer</button>
@@ -1526,20 +1520,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ appData, setAppData, clo
                 <button onClick={openAddCategoryModal} className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600">Ajouter une catégorie</button>
             </div>
             <div className="bg-white rounded-lg shadow overflow-hidden">
-                <div className="grid grid-cols-2 font-bold p-3 bg-gray-50 border-b">
+                <div className="grid grid-cols-3 font-bold p-3 bg-gray-50 border-b">
                     <div>Nom</div>
+                    <div>Imprimante (Préparation)</div>
                     <div className="text-right">Actions</div>
                 </div>
                 <div className="divide-y divide-gray-200 max-h-[60vh] overflow-y-auto">
-                    {appData.categories.map(category => (
-                        <div key={category.id} className="grid grid-cols-2 p-3 items-center">
-                            <div>{category.name}</div>
-                            <div className="flex gap-2 justify-end">
-                                <button onClick={() => openEditCategoryModal(category)} className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600">Modifier</button>
-                                <button onClick={() => requestDeleteCategory(category)} className="px-3 py-1 text-sm bg-red-500 text-white rounded hover:bg-red-600">Supprimer</button>
+                    {appData.categories.map(category => {
+                         const printer = appData.printers.find(p => p.id === category.printerId);
+                         return (
+                            <div key={category.id} className="grid grid-cols-3 p-3 items-center">
+                                <div>{category.name}</div>
+                                <div className="text-sm text-gray-600">{printer ? printer.name : 'Par Défaut'}</div>
+                                <div className="flex gap-2 justify-end">
+                                    <button onClick={() => openEditCategoryModal(category)} className="px-3 py-1 text-sm bg-blue-500 text-white rounded hover:bg-blue-600">Modifier</button>
+                                    <button onClick={() => requestDeleteCategory(category)} className="px-3 py-1 text-sm bg-red-500 text-white rounded hover:bg-red-600">Supprimer</button>
+                                </div>
                             </div>
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
             </div>
         </div>
@@ -1996,14 +1995,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ appData, setAppData, clo
                             {appData.categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                         </select>
                     </div>
-                    <div>
-                         <label className="block text-sm font-medium mb-1">Imprimante (Préparation)</label>
-                         <select name="printerId" value={productForm.printerId} onChange={handleProductFormChange} className="w-full border p-2 rounded">
-                            <option value="">Par défaut (Système ou Principale)</option>
-                            {appData.printers.map(p => <option key={p.id} value={p.id}>{p.name} ({p.type})</option>)}
-                        </select>
-                        <p className="text-xs text-gray-500 mt-1">L'imprimante où sera envoyé ce produit lors de l'impression "Préparation".</p>
-                    </div>
                     <button onClick={handleSaveProduct} className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">Sauvegarder</button>
                 </div>
             </Modal>
@@ -2020,7 +2011,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ appData, setAppData, clo
                 <div className="space-y-4">
                     <div>
                         <label className="block text-sm font-medium mb-1">Nom</label>
-                        <input type="text" value={categoryForm.name} onChange={(e) => setCategoryForm({ name: e.target.value })} className="w-full border p-2 rounded" />
+                        <input type="text" value={categoryForm.name} onChange={(e) => setCategoryForm({...categoryForm, name: e.target.value})} className="w-full border p-2 rounded" />
+                    </div>
+                     <div>
+                         <label className="block text-sm font-medium mb-1">Imprimante (Préparation)</label>
+                         <select 
+                            value={categoryForm.printerId} 
+                            onChange={(e) => setCategoryForm({...categoryForm, printerId: e.target.value})} 
+                            className="w-full border p-2 rounded"
+                         >
+                            <option value="">Par défaut (Système ou Principale)</option>
+                            {appData.printers.map(p => <option key={p.id} value={p.id}>{p.name} ({p.type})</option>)}
+                        </select>
+                        <p className="text-xs text-gray-500 mt-1">Tous les produits de cette catégorie seront envoyés à cette imprimante lors de la préparation.</p>
                     </div>
                     <button onClick={handleSaveCategory} className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">Sauvegarder</button>
                 </div>
