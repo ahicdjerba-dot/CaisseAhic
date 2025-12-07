@@ -771,15 +771,18 @@ const App: React.FC = () => {
             if (device) {
                 setAppData(prev => {
                     // Check if exists
-                    const exists = prev.printers.find(p => p.address === device.id);
-                    if (exists) {
-                        alert("Cette imprimante est déjà configurée.");
-                        return prev;
+                    const existingPrinter = prev.printers.find(p => p.address === device.id);
+                    if (existingPrinter) {
+                         alert(`L'imprimante "${existingPrinter.name}" est maintenant configurée pour les Tickets/Paiements.`);
+                        return {
+                            ...prev,
+                            defaultPrinterId: existingPrinter.id
+                        };
                     }
                     
                     const newPrinter: Printer = {
                         id: Date.now(),
-                        name: bluetoothPrinterName || device.name || 'Imprimante BT',
+                        name: bluetoothPrinterName || device.name || 'Imprimante Caisse',
                         type: 'bluetooth',
                         address: device.id,
                         useEscPos: true,
@@ -787,13 +790,11 @@ const App: React.FC = () => {
                         encoding: 'PC858'
                     };
                     
-                    // Add and set as default if first one, otherwise just add
-                    const isFirst = prev.printers.length === 0;
-                    
+                    // Always set as default (Ticket/Payment printer)
                     return {
                         ...prev,
                         printers: [...prev.printers, newPrinter],
-                        defaultPrinterId: isFirst ? newPrinter.id : prev.defaultPrinterId
+                        defaultPrinterId: newPrinter.id
                     };
                 });
                 setBluetoothModalOpen(false);
@@ -801,6 +802,57 @@ const App: React.FC = () => {
             }
         } catch (err) {
             setBluetoothSearchMessage("Annulé ou Erreur.");
+        }
+    };
+    
+    // --- CATEGORY BLUETOOTH PAIRING ---
+    const handleCategoryPrinterPairing = async (category: Category) => {
+         if (!(navigator as any).bluetooth) {
+            alert("Bluetooth non supporté par ce navigateur.");
+            return;
+        }
+
+        try {
+            const device = await (navigator as any).bluetooth.requestDevice({
+                acceptAllDevices: true,
+                optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb']
+            });
+            
+            if (device) {
+                setAppData(prev => {
+                    let printerId = prev.printers.find(p => p.address === device.id)?.id;
+                    let newPrinters = [...prev.printers];
+
+                    if (!printerId) {
+                        // Create new printer if it doesn't exist
+                        const newPrinter: Printer = {
+                            id: Date.now(),
+                            name: `BT-${category.name}`,
+                            type: 'bluetooth',
+                            address: device.id,
+                            useEscPos: true,
+                            paperWidth: 80,
+                            encoding: 'PC858'
+                        };
+                        newPrinters.push(newPrinter);
+                        printerId = newPrinter.id;
+                    }
+
+                    // Update Category with new printer ID
+                    const newCategories = prev.categories.map(cat => 
+                        cat.id === category.id ? { ...cat, printerId: printerId } : cat
+                    );
+
+                    return {
+                        ...prev,
+                        printers: newPrinters,
+                        categories: newCategories
+                    };
+                });
+                alert(`Imprimante assignée à la catégorie : ${category.name}`);
+            }
+        } catch (err) {
+            console.error("Erreur Bluetooth catégorie", err);
         }
     };
 
@@ -942,6 +994,28 @@ const App: React.FC = () => {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
                         </svg>
                     </button>
+
+                    {/* Category Printer Pairing Buttons */}
+                    <div className="flex items-center gap-2 overflow-x-auto max-w-[500px] no-scrollbar border-l border-gray-600 pl-4 ml-2">
+                        {appData.categories.map(cat => (
+                            <button
+                                key={cat.id}
+                                onClick={() => handleCategoryPrinterPairing(cat)}
+                                className={`px-2 py-1 text-xs rounded border flex items-center gap-1 whitespace-nowrap transition-colors
+                                    ${cat.printerId 
+                                        ? 'bg-green-700 border-green-500 hover:bg-green-600 text-white' 
+                                        : 'bg-slate-700 border-slate-600 hover:bg-slate-600 text-gray-300'
+                                    }`}
+                                title={`Configurer imprimante préparation pour ${cat.name}`}
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                                </svg>
+                                {cat.name}
+                            </button>
+                        ))}
+                    </div>
+
                 </div>
                 
                 <div className="flex items-center gap-4">
@@ -1162,15 +1236,15 @@ const App: React.FC = () => {
             </Modal>
 
             {/* Quick Bluetooth Modal */}
-            <Modal title="Connexion Bluetooth Rapide" isOpen={isBluetoothModalOpen} onClose={() => setBluetoothModalOpen(false)}>
+            <Modal title="Imprimante Ticket & Paiement (Bluetooth)" isOpen={isBluetoothModalOpen} onClose={() => setBluetoothModalOpen(false)}>
                 <div className="space-y-4">
-                    <p className="text-sm text-gray-600">Ajoutez rapidement une imprimante Bluetooth pour ce poste (Tablette/Mobile). Elle sera configurée en 80mm ESC/POS.</p>
+                    <p className="text-sm text-gray-600">Connectez l'imprimante Bluetooth qui servira pour les <b>Tickets Clients</b> et les <b>Paiements</b>. Elle sera définie par défaut.</p>
                     <div>
                         <label className="block text-sm font-medium">Nom (Optionnel)</label>
                         <input 
                             type="text" 
                             className="w-full border p-2 rounded" 
-                            placeholder="Ex: Cuisine, Bar..." 
+                            placeholder="Ex: Caisse, Ticket..." 
                             value={bluetoothPrinterName}
                             onChange={e => setBluetoothPrinterName(e.target.value)}
                         />
