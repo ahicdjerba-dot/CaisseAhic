@@ -109,6 +109,9 @@ const App: React.FC = () => {
     const [ipPrinterName, setIpPrinterName] = useState('');
     const [ipAddress, setIpAddress] = useState('');
     const [ipPort, setIpPort] = useState('9100');
+    
+    // State for Category Printer Config Modal
+    const [isPrinterConfigModalOpen, setPrinterConfigModalOpen] = useState(false);
 
 
     useEffect(() => {
@@ -440,6 +443,7 @@ const App: React.FC = () => {
                     <div class="footer">
                        <p>Merci de votre visite !</p>
                     </div>
+                    <br><br><br><br>
                 </body>
             </html>
         `;
@@ -492,6 +496,7 @@ const App: React.FC = () => {
                             `).join('')}
                         </tbody>
                     </table>
+                    <br><br><br><br>
                 </body>
             </html>
         `;
@@ -534,7 +539,7 @@ const App: React.FC = () => {
                 let method = paymentMethod === 'cash' ? 'Especes' : paymentMethod === 'card' ? 'Carte' : 'Credit';
                 text += `[R]Paye par: ${method}\n`;
             }
-            text += `[C]\n[C]Merci de votre visite !\n[L]\n[L]\n`;
+            text += `[C]\n[C]Merci de votre visite !\n[L]\n[L]\n[L]\n[L]\n\x1dV\x01`;
 
         } else if (type === 'preparation') {
             const itemsToPrint = itemsOverride || sale.items;
@@ -548,7 +553,7 @@ const App: React.FC = () => {
             itemsToPrint.forEach(item => {
                  text += `[L]<b><font size='big'>${item.quantity} x  ${item.name}</font></b>\n`;
             });
-            text += `[L]\n[L]\n`;
+            text += `[L]\n[L]\n[L]\n[L]\n\x1dV\x01`;
         }
         
         return text;
@@ -912,7 +917,7 @@ const App: React.FC = () => {
             {/* Header */}
             <header className="bg-slate-800 text-white p-4 flex justify-between items-center shadow-md shrink-0">
                 <div className="flex items-center gap-4">
-                    <h1 className="text-xl font-bold">Bar POS</h1>
+                    <h1 className="text-xl font-bold">AHIC</h1>
                      {currentUser.type !== 'server' && (
                         <button onClick={handleAdminClick} className="px-3 py-1 bg-slate-600 rounded hover:bg-slate-500 text-sm">
                             Admin
@@ -1055,16 +1060,28 @@ const App: React.FC = () => {
 
                 {/* Right: Products */}
                 <div className="w-1/3 bg-white flex flex-col">
-                    <div className="flex overflow-x-auto border-b">
-                        {appData.categories.map(cat => (
-                            <button
-                                key={cat.id}
-                                onClick={() => setCurrentCategoryId(cat.id)}
-                                className={`px-4 py-3 whitespace-nowrap font-medium ${currentCategoryId === cat.id ? 'text-blue-600 border-b-2 border-blue-600' : 'text-gray-500'}`}
-                            >
-                                {cat.name}
-                            </button>
-                        ))}
+                     <div className="flex border-b bg-gray-50">
+                        <button 
+                             onClick={() => setPrinterConfigModalOpen(true)}
+                             className="p-3 text-gray-600 hover:text-blue-600 bg-gray-100 border-r border-gray-200 hover:bg-gray-200 transition-colors"
+                             title="Configurer Imprimantes"
+                        >
+                             <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            </svg>
+                        </button>
+                        <div className="flex overflow-x-auto flex-1">
+                            {appData.categories.map(cat => (
+                                <button
+                                    key={cat.id}
+                                    onClick={() => setCurrentCategoryId(cat.id)}
+                                    className={`px-4 py-3 whitespace-nowrap font-medium ${currentCategoryId === cat.id ? 'bg-white text-blue-600 border-b-2 border-blue-600' : 'text-gray-500 hover:bg-gray-50'}`}
+                                >
+                                    {cat.name}
+                                </button>
+                            ))}
+                        </div>
                     </div>
                     
                     <div className="flex-1 overflow-y-auto p-4 grid grid-cols-2 lg:grid-cols-3 gap-3 content-start">
@@ -1211,6 +1228,40 @@ const App: React.FC = () => {
                     <div className="flex justify-end gap-3 mt-4">
                         <button onClick={() => setIpModalOpen(false)} className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300">Annuler</button>
                         <button onClick={handleQuickIpAdd} className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 font-bold">Sauvegarder</button>
+                    </div>
+                </div>
+            </Modal>
+            
+            {/* Printer Config Modal */}
+            <Modal title="Configuration Imprimantes Catégories" isOpen={isPrinterConfigModalOpen} onClose={() => setPrinterConfigModalOpen(false)}>
+                <div className="space-y-4 max-h-[60vh] overflow-y-auto p-1">
+                    <p className="text-sm text-gray-600 mb-4">
+                        Choisissez sur quelle imprimante envoyer les bons de préparation pour chaque catégorie.
+                    </p>
+                    {appData.categories.map(cat => (
+                        <div key={cat.id} className="flex flex-col gap-1 border-b pb-2 mb-2 last:border-0">
+                            <label className="font-semibold text-gray-800">{cat.name}</label>
+                            <select 
+                                className="border p-2 rounded w-full bg-gray-50"
+                                value={cat.printerId || ''}
+                                onChange={(e) => {
+                                    const val = e.target.value;
+                                    const pid = val ? parseInt(val) : undefined;
+                                    setAppData(prev => ({
+                                        ...prev,
+                                        categories: prev.categories.map(c => c.id === cat.id ? { ...c, printerId: pid } : c)
+                                    }));
+                                }}
+                            >
+                                <option value="">Imprimante par défaut</option>
+                                {appData.printers.map(p => (
+                                    <option key={p.id} value={p.id}>{p.name} ({p.type})</option>
+                                ))}
+                            </select>
+                        </div>
+                    ))}
+                    <div className="flex justify-end pt-2">
+                        <button onClick={() => setPrinterConfigModalOpen(false)} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Fermer</button>
                     </div>
                 </div>
             </Modal>
